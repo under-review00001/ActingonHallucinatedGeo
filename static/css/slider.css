@@ -1,0 +1,313 @@
+/* ============================================================================
+   PG supplementary site — RGB <-> depth comparison slider (custom layer).
+   Loaded LAST, after pg.css, so it inherits the design tokens defined there
+   (--ink, --rule, --rule-2, --radius-pill, --font-body, --shadow-*, --ease …).
+   No external assets, no network, no dependencies. Offline-safe.
+
+   ONE component, TWO modes (chosen at runtime by static/js/slider.js):
+     - STATIC : two stacked pixel-aligned <img>; the top (colorized depth) is
+                clipped by a draggable vertical divider.
+     - VIDEO  : two frame-synced <video> stacked; the top is clipped by the same
+                divider while both play under one shared controller.
+   GRACEFUL DEGRADATION: prefers-reduced-motion, or a missing / failed video,
+   falls back to the STATIC slider for that instance. Both stay in the DOM; the
+   JS toggles which is live by setting [data-mode] on the root.
+
+   The divider position is a single custom property --rev (0..100), the percent
+   REVEALED from the *right* edge, so the top media is clipped with
+   `clip-path: inset(0 var(--rev)% 0 0)`. At --rev:0 the depth fully covers the
+   RGB; at --rev:100 the RGB is fully shown. The handle's left position is the
+   complement (100 - --rev)%.
+   ========================================================================= */
+
+/* -------------------------------------------------------- component tokens */
+.pg-slider {
+  /* fall back to pg.css tokens, but degrade gracefully if loaded alone */
+  --rev: 50;                                   /* % revealed from the right     */
+  --sl-handle: 40px;                           /* divider knob diameter         */
+  --sl-line: 2px;                              /* divider hairline thickness    */
+  --sl-radius: var(--radius-pill, 290486px);
+  --sl-ink: var(--ink, #0a0a0a);
+  --sl-rule: var(--rule, #ededed);
+  --sl-rule-2: var(--rule-2, #e3e3e3);
+  --sl-font: var(--font-body, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif);
+
+  position: relative;
+  display: block;
+  width: 100%;
+  margin: 0;
+  /* The aspect-ratio is supplied inline (data-aspect, default 1/1) so the box
+     reserves its height before media decode — zero cumulative layout shift. */
+  aspect-ratio: var(--sl-aspect, 1 / 1);
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--sl-rule);
+  border-radius: 12px;
+  box-shadow: var(--shadow-soft, 0 1px 2px rgba(10,10,10,0.04), 0 10px 30px -22px rgba(10,10,10,0.35));
+  /* The whole surface is the drag target; the handle just visualises it. */
+  cursor: ew-resize;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  /* Let vertical scroll through but claim horizontal drags for the divider. */
+  touch-action: pan-y;
+  /* keyboard focus lands on the root (role=slider); show a clear ring */
+  outline: none;
+}
+.pg-slider:focus-visible {
+  box-shadow: 0 0 0 3px rgba(31, 143, 222, 0.30),
+              var(--shadow-soft, 0 1px 2px rgba(10,10,10,0.04), 0 10px 30px -22px rgba(10,10,10,0.35));
+}
+
+/* ----------------------------------------------------------------- layers */
+/* Each mode lives in its own layer; JS reveals exactly one via [data-mode]. */
+.pg-slider__layer {
+  position: absolute;
+  inset: 0;
+  display: none;
+}
+.pg-slider[data-mode="static"] .pg-slider__layer--static { display: block; }
+.pg-slider[data-mode="video"]  .pg-slider__layer--video  { display: block; }
+
+/* Both media in a layer fully cover the box and are pixel-aligned. */
+.pg-slider__media {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  margin: 0;
+  pointer-events: none;          /* drags belong to the root, not the media */
+  background: var(--surface-2, #f5f5f5);
+}
+
+/* The UNDER media (RGB) is the base; the OVER media (depth) is clipped to the
+   right of the divider, so dragging left reveals more RGB. */
+.pg-slider__media--under { z-index: 1; }
+.pg-slider__media--over  {
+  z-index: 2;
+  clip-path: inset(0 calc(var(--rev) * 1%) 0 0);
+  -webkit-clip-path: inset(0 calc(var(--rev) * 1%) 0 0);
+}
+
+/* ----------------------------------------------------- corner labels */
+.pg-slider__tag {
+  position: absolute;
+  top: 10px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: var(--sl-font);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--sl-ink);
+  background: rgba(255, 255, 255, 0.92);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  border: 1px solid var(--sl-rule-2);
+  border-radius: 6px;
+  padding: 0.24rem 0.5rem;
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: calc(50% - 18px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pg-slider__tag--over  { left: 10px; }      /* Raw depth: over layer is clipped from the RIGHT, so it shows on the LEFT */
+.pg-slider__tag--under { right: 10px; }     /* RGB: under layer is revealed on the RIGHT */
+
+/* ----------------------------------------------------- divider + handle */
+.pg-slider__divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 5;
+  /* centre the line on the seam between revealed/clipped (100 - rev from left) */
+  left: calc((100 - var(--rev)) * 1%);
+  width: var(--sl-line);
+  margin-left: calc(var(--sl-line) / -2);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 0 1px rgba(10, 10, 10, 0.18);
+  pointer-events: none;          /* the root owns pointer drags */
+}
+.pg-slider__handle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--sl-handle);
+  height: var(--sl-handle);
+  transform: translate(-50%, -50%);
+  border-radius: var(--sl-radius);
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--sl-rule-2);
+  box-shadow: 0 2px 6px rgba(10, 10, 10, 0.10), 0 8px 22px -10px rgba(10, 10, 10, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  color: var(--sl-ink);
+  /* subtle scale-in on hover/active; gated for reduced-motion below */
+  transition: transform 150ms var(--ease, cubic-bezier(0.22, 0.61, 0.36, 1)),
+              box-shadow 150ms var(--ease, cubic-bezier(0.22, 0.61, 0.36, 1));
+}
+.pg-slider:hover .pg-slider__handle,
+.pg-slider:focus-visible .pg-slider__handle,
+.pg-slider.is-dragging .pg-slider__handle {
+  transform: translate(-50%, -50%) scale(1.06);
+  box-shadow: 0 2px 8px rgba(10, 10, 10, 0.14), 0 10px 26px -10px rgba(10, 10, 10, 0.5);
+}
+/* two small chevrons drawn with borders — no glyph font, no external icon */
+.pg-slider__chev {
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+}
+.pg-slider__chev--l { border-right: 6px solid currentColor; }
+.pg-slider__chev--r { border-left: 6px solid currentColor; }
+
+/* ----------------------------------------------------- a11y / hint */
+/* visually-hidden live label kept off-screen for screen-reader value text */
+.pg-slider__sr {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* a quiet one-time hint at the bottom-centre ("drag / ←→") */
+.pg-slider__hint {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  z-index: 4;
+  transform: translateX(-50%);
+  font-family: var(--sl-font);
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--sl-ink);
+  background: rgba(255, 255, 255, 0.86);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  border: 1px solid var(--sl-rule-2);
+  border-radius: var(--sl-radius);
+  padding: 0.2rem 0.6rem;
+  pointer-events: none;
+  opacity: 0.92;
+  transition: opacity 220ms var(--ease, cubic-bezier(0.22, 0.61, 0.36, 1));
+}
+.pg-slider.is-dragging .pg-slider__hint { opacity: 0; }
+
+/* until JS upgrades the instance, hide chrome that needs scripting (handle,
+   divider) so a no-JS page just shows the under image full-bleed; the layer is
+   still display:none until [data-mode] is set, so this is belt-and-suspenders */
+.pg-slider:not([data-mode]) .pg-slider__divider,
+.pg-slider:not([data-mode]) .pg-slider__handle,
+.pg-slider:not([data-mode]) .pg-slider__hint { display: none; }
+
+/* ----------------------------------------------------- reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .pg-slider__handle,
+  .pg-slider__hint { transition: none; }
+  .pg-slider:hover .pg-slider__handle,
+  .pg-slider:focus-visible .pg-slider__handle,
+  .pg-slider.is-dragging .pg-slider__handle {
+    transform: translate(-50%, -50%);
+  }
+}
+
+/* ----------------------------------------------------- caption (optional) */
+/* mirrors .pg-pair__cap so a slider can drop in where a pair cell was */
+.pg-slider-cap {
+  margin-top: 0.7rem;
+  font-family: var(--sl-font);
+  font-style: italic;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--ink-soft, #4a4a4a);
+  text-align: center;
+}
+.pg-slider-cap b { color: var(--ink, #0a0a0a); font-weight: 700; font-style: italic; }
+.pg-slider-cap i { font-style: italic; }
+
+/* ------------------------------------------------- PRIMARY: single figure */
+/* §3 motivation — the slider replaces the old RGB | raw-depth pair as ONE
+   centered figure. The stills are square (768²); cap the box so it reads as a
+   single figure rather than a wall-sized square (the old pair cells were each
+   ~half of the 820px row). */
+.pg-pair-slider {
+  margin: 1.8rem auto 0;
+  max-width: 480px;
+}
+.pg-pair-slider .pg-slider-cap { margin-top: 0.8rem; }
+
+/* --------------------------------------------------- §3 2-UP standalone row */
+/* "Color is clean; geometry is not." — two independent .pg-slider scenes
+   (test-tube + petri lid) side-by-side, each with its own caption. Two squares
+   at desktop; stacks to one column on narrow viewports. Cells top-align so
+   unequal-length captions don't force a common height. */
+.pg-pair-duo {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  align-items: start;
+  gap: 1.6rem;
+  max-width: 880px;
+  margin: 1.8rem auto 0;
+}
+.pg-pair-duo__cell { margin: 0; }
+.pg-pair-duo .pg-slider-cap { margin-top: 0.8rem; }
+
+@media (max-width: 760px) {
+  .pg-pair-duo { grid-template-columns: 1fr; max-width: 480px; gap: 2rem; }
+}
+
+/* ------------------------------------------------- SECONDARY: per-task grid */
+/* A clean stacked/responsive row of one slider per real-robot task. Mixed
+   aspect ratios (two 1/1, one 16/9) — cells align to the top so the captions
+   sit on their own lines without forcing a common box height. */
+.pg-slider-grid__head {
+  text-align: center;
+  margin: 2.6rem auto 0.4rem;
+}
+.pg-slider-grid__sub {
+  margin-inline: auto;
+  margin-bottom: 0;
+  text-align: center;
+}
+.pg-slider-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  align-items: start;
+  gap: 1.3rem;
+  margin: 1.5rem auto 0;
+  max-width: var(--maxw, 1000px);
+}
+.pg-slider-grid__cell { margin: 0; }
+.pg-slider-grid__cap {
+  margin-top: 0.6rem;
+  font-family: var(--sl-font);
+  font-style: italic;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--ink-soft, #4a4a4a);
+  text-align: center;
+}
+.pg-slider-grid__cap b { color: var(--ink, #0a0a0a); font-weight: 700; font-style: italic; }
+
+@media (max-width: 900px) {
+  /* two-up: pair the squares on top, the 16/9 acrylic drops to its own row */
+  .pg-slider-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 600px) {
+  .pg-slider-grid { grid-template-columns: 1fr; max-width: 480px; }
+  .pg-slider-grid__cap { text-align: center; }
+}

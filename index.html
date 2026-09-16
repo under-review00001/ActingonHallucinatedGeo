@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Acting on Hallucinated Geometry — Epistemic Provenance for 3D Manipulation Policies</title>
+  <meta name="description" content="Depth prediction recovers geometry where sensing fails, but can introduce plausible yet metrically incorrect surfaces. Epistemic provenance preserves each point's measured-or-predicted origin and initialises a learnable gate over how strongly the policy relies on it. Anonymous ICRA 2027 submission.">
+  <!-- noindex while under review: keeps the page out of search caches that would
+       later sit beside a de-anonymised camera-ready. Flip at camera-ready. -->
+  <meta name="robots" content="noindex, nofollow">
+  <!-- Inline data-URI favicon: neutral geometric mark, no logo or identifying text.
+       Deliberately NOT the same mark as any other page from this account. -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%230f2630'/%3E%3Cpath%20d='M16%207l9%209-9%209-9-9z'%20fill='%23e0a13a'/%3E%3C/svg%3E">
+  <!-- All assets local/relative. No analytics, no external scripts, no font CDN. -->
+
+  <link rel="stylesheet" href="static/css/bulma.min.css">
+  <link rel="stylesheet" href="static/css/fontawesome.min.css">
+  <link rel="stylesheet" href="static/css/academicons.min.css">
+  <link rel="stylesheet" href="static/css/fonts.css">
+  <link rel="stylesheet" href="static/css/site.css">
+  <!-- RGB <-> depth comparison slider (inherits site.css tokens - load AFTER it) -->
+  <link rel="stylesheet" href="static/css/slider.css">
+
+  <style>
+  /* Provenance / scope line under a figure. */
+  .pg-prov{display:block;margin-top:.6rem;font-family:'JetBrains Mono',ui-monospace,monospace;
+           font-size:.74em;line-height:1.7;color:#5b6b73;letter-spacing:.01em}
+  .pg-prov b{color:#7a4708;font-weight:500}
+  /* Results table, in the page's own type. */
+  .pg-table{width:100%;border-collapse:collapse;margin:1.6rem 0 .4rem;font-size:.95rem}
+  .pg-table th,.pg-table td{padding:.62rem .7rem;text-align:right;border-bottom:1px solid #e3e7ea}
+  .pg-table th:first-child,.pg-table td:first-child{text-align:left}
+  .pg-table thead th{border-bottom:1.5px solid #9aa6ad;font-weight:600;font-size:.86rem;
+                     letter-spacing:.04em;text-transform:uppercase;color:#5b6b73}
+  .pg-table tbody tr:last-child td{border-bottom:1.5px solid #9aa6ad}
+  .pg-table .pg-ours{font-weight:700;color:#c0561f}
+  .pg-table td{font-variant-numeric:tabular-nums}
+  /* Bulma resets list markers; put them back for prose lists. */
+  .pg-body-text li{list-style:disc outside;margin-left:1.2em;margin-bottom:.55rem}
+  .pg-body-text li::marker{color:#9aa6ad}
+  </style>
+</head>
+<body class="pg-body">
+
+  <!-- =====================================================================
+       ===== DE-ANON / DROP-IN CONFIG (camera-ready: edit here) ============
+
+       (1) AUTHOR ROW - id="author-row" reads "Anonymous Author(s)".
+       (2) PAPER BUTTON - greyed <span id="paper-btn">; swap for
+           <a class="pg-btn pg-btn--primary" href="static/paper.pdf"> ... </a>
+           and place the PDF at static/paper.pdf.
+       (3) CODE href - id="code-btn" is href="#" rel="nofollow".
+       (4) ROBOTS - noindex,nofollow while under review.
+
+       SOURCE OF TRUTH: paper/icra26 at commit cdae763. Title and abstract are
+       VERBATIM from main.tex; contributions verbatim from sections/01_intro.tex;
+       figure captions condensed from the paper's own captions; the real-robot
+       table is sections/04_experiment.tex's Table I.
+       NOT on this page, deliberately: the simulation success-rate table, which
+       is commented out in 04_experiment.tex (archived at the author's request).
+       Its numbers therefore are not paper text and are not quoted here; the
+       simulation figure carries its own.
+       ===================================================================== -->
+
+  <!-- ===================== ASSET PROVENANCE (not rendered) ===============
+       paper_teaser.png      <- figures/teaser_academic_v12_predicted.pdf
+       paper_pipeline.png    <- figures/pipeline_academic_v19_predicted.pdf
+       paper_simulation.png  <- figures/simulation_experiment_v6_tight.pdf
+       paper_realrobot.png   <- figures/real_robot_experiment_v8.pdf
+       (pdftoppm at 300-500 dpi, downscaled to <=2400 px, metadata dropped)
+       bottlelid_*, wrist2_* <- experiments/bottle_lid/samples_real_v2/
+       evidence_seethrough.png <- framing/figs/2026-09-13_universality/
+       Supplementary numbers <- experiments/bottle_lid/2026-09-15_depth-evidence-receipt.md
+       ==================================================================== -->
+
+  <!-- ============================== TOP NAV ============================== -->
+  <nav class="pg-nav" aria-label="Section navigation">
+    <div class="pg-wrap pg-nav__inner">
+      <a class="pg-nav__brand" href="#top" aria-label="Top of page">
+        <span class="sc">Epistemic Provenance</span>
+      </a>
+      <button class="pg-burger" type="button" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="nav-links">
+        <i class="fas fa-bars" aria-hidden="true"></i>
+      </button>
+      <ul class="pg-nav__links" id="nav-links">
+        <li><a href="#abstract"><span>Abstract</span></a></li>
+        <li><a href="#problem"><span>Problem</span></a></li>
+        <li><a href="#method"><span>Method</span></a></li>
+        <li><a href="#simulation"><span>Simulation</span></a></li>
+        <li><a href="#real-robot"><span>Real&nbsp;robot</span></a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main id="top">
+
+    <!-- ================================ HERO ============================= -->
+    <header class="pg-hero">
+
+      <div class="pg-herobg" aria-hidden="true">
+        <div class="pg-herobg__edges">
+          <div class="pg-herobg__col pg-herobg__col--left">
+            <img class="pg-herobg__img" src="static/images/wrist2_rgb.png" alt="" loading="lazy" decoding="async" width="640" height="480">
+          </div>
+          <div class="pg-herobg__col pg-herobg__col--right">
+            <img class="pg-herobg__img" src="static/images/bottlelid_rgb.png" alt="" loading="lazy" decoding="async" width="640" height="480">
+          </div>
+        </div>
+        <div class="pg-herobg__band">
+          <img class="pg-herobg__img" src="static/images/d455_t27.png" alt="" loading="lazy" decoding="async" width="1280" height="720">
+        </div>
+        <div class="pg-herobg__veil"></div>
+        <div class="pg-herobg__scrim"></div>
+        <div class="pg-herobg__hair"></div>
+      </div>
+
+      <div class="pg-wrap pg-hero__inner">
+
+        <p class="pg-hero__kicker hero-stagger" style="--d:0ms">
+          <span>3D&nbsp;Manipulation</span> · <span>Predicted&nbsp;Depth</span> · <span>Learned&nbsp;Reliance</span>
+        </p>
+
+        <h1 class="pg-hero__title hero-stagger" style="--d:90ms">
+          Acting on Hallucinated Geometry: Epistemic Provenance for 3D Manipulation Policies
+        </h1>
+        <p class="pg-hero__sub hero-stagger" style="--d:190ms">
+          Depth prediction recovers surfaces where sensing fails &mdash; and can invent ones that
+          are plausible but metrically wrong. We keep every point's <em>measured or predicted</em>
+          origin, learn how strongly the policy should rely on it, and leave that reliance
+          adjustable at deployment.
+        </p>
+
+        <!-- (1) AUTHOR ROW (de-anon edit point) -->
+        <div class="pg-authors hero-stagger" id="author-row" style="--d:300ms">
+          <span class="pg-authors__name">Anonymous Author(s)</span>
+          <span class="pg-authors__venue">IEEE International Conference on Robotics and Automation (ICRA) 2027</span>
+        </div>
+
+        <!-- (2)(3) BUTTON ROW -->
+        <div class="pg-cta hero-stagger" id="cta-row" style="--d:400ms">
+          <span class="pg-btn pg-btn--disabled" id="paper-btn" aria-disabled="true" role="link" tabindex="-1" title="Paper not yet available" aria-label="Paper (not yet available)">
+            <span class="icon"><i class="fas fa-file-pdf"></i></span>Paper
+          </span>
+          <a class="pg-btn pg-btn--primary" id="code-btn" href="#" rel="nofollow" aria-label="Code (released upon acceptance)">
+            <span class="icon"><i class="fab fa-github"></i></span>Code
+          </a>
+          <span class="pg-cta__note">
+            <span class="icon"><i class="fas fa-lock"></i></span>
+            Code will be released upon acceptance.
+          </span>
+        </div>
+
+      </div>
+    </header>
+
+    <hr class="pg-rule">
+
+    <!-- ============================== ABSTRACT (02) ====================== -->
+    <section class="pg-section" id="abstract">
+      <div class="pg-wrap pg-narrow">
+        <div class="pg-eyebrow reveal">
+          <span class="pg-eyebrow__num">02</span>
+          <span class="pg-eyebrow__label">Abstract</span>
+          <span class="pg-eyebrow__rule" aria-hidden="true"></span>
+        </div>
+        <h2 class="pg-h2 reveal">Separate the geometry a policy has from <em>how far it should trust it</em>.</h2>
+        <!-- Verbatim from main.tex, sentence order preserved. -->
+        <p class="pg-lead reveal">
+          Real-world depth measurements can be missing or inaccurate, leaving 3D manipulation
+          policies without reliable geometry. Depth prediction can recover useful surfaces, but may
+          also introduce <span class="concept">hallucinated geometry</span>: plausible yet
+          metrically incorrect shapes that mislead contact and motion. We propose a framework for
+          learning how strongly a manipulation policy should rely on predicted geometry.
+        </p>
+        <p class="pg-body-text reveal">
+          <span class="concept">Epistemic provenance</span> preserves whether each point was
+          measured or predicted and initializes a learnable gate that weights its contribution to
+          the policy. Since origin alone does not establish correctness, imitation and
+          <span class="concept">deep-ensemble supervision</span> guide the gate toward weights that
+          support demonstrated behavior and consistent predictions across independently trained
+          policies. The framework supports point-cloud, token-based, and rendered-view policies
+          while leaving surface coordinates unchanged.
+        </p>
+        <p class="pg-body-text reveal">
+          At deployment, a single policy uses the learned weights, and an operator can adjust the
+          influence of predicted geometry without retraining or running the ensemble. Experiments
+          across three 3D policy architectures and real-robot transparent-object manipulation show
+          improved success under missing and inaccurate depth compared with provenance labels alone
+          or fixed weights.
+        </p>
+
+        <h3 class="pg-h3 reveal">Contributions</h3>
+        <ul class="pg-body-text reveal">
+          <li>We introduce <b>epistemic provenance</b> to preserve the measured or predicted origin
+              of geometry in point-cloud, token-based, and rendered-view manipulation policies.</li>
+          <li><b>Deep-ensemble supervision</b> guides a provenance-initialized gate to learn how
+              strongly each point should influence action, alongside imitation learning. The
+              resulting weights remain adjustable at deployment without retraining or running the
+              ensemble.</li>
+          <li>Learned pointwise weighting <b>improves manipulation success</b> under missing and
+              inaccurate depth beyond provenance labels or fixed weights, with benefits across
+              three 3D policy architectures and real-robot transparent-object manipulation.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================== PROBLEM (03) ======================= -->
+    <section class="pg-section pg-section--tint" id="problem">
+      <div class="pg-wrap pg-narrow">
+        <div class="pg-eyebrow reveal">
+          <span class="pg-eyebrow__num">03</span>
+          <span class="pg-eyebrow__label">The problem</span>
+          <span class="pg-eyebrow__rule" aria-hidden="true"></span>
+        </div>
+        <h2 class="pg-h2 reveal">A plausible scene is not the same as <em>a scene you can act in</em>.</h2>
+        <p class="pg-lead reveal">
+          On transparent and reflective surfaces a sensor may return no depth at all, or apparently
+          valid readings from the wrong surface. Depth prediction is the practical remedy, and it
+          does restore information that manipulation needs &mdash; but visual plausibility does not
+          guarantee the metric accuracy contact requires. A predicted surface can resemble the
+          object while lying at the wrong depth, directing a gripper toward empty space or giving
+          the policy an incorrect estimate of clearance.
+        </p>
+      </div>
+
+      <div class="pg-wrap">
+        <figure class="pg-figure reveal">
+          <div class="pg-figure__frame">
+            <img src="static/images/paper_teaser.png" width="1750" height="1875" loading="lazy" decoding="async"
+                 alt="Transparent-bottle stowing. Top: the bimanual workspace and a success-rate chart reading 10% for raw depth, 45% for predicted depth and 85% for ours. Below, three columns - raw depth, predicted depth, and ours - each shown as a depth map, a point cloud and a side view; the raw depth is missing over the bottle, the prediction covers it with a smooth surface, and ours colours the same points by their learned gate value.">
+          </div>
+          <figcaption class="pg-figure__cap">
+            <b>Reliable manipulation requires more than plausible geometry.</b> Transparent-bottle
+            stowing illustrates the challenge. <b>(a)</b> Raw depth is missing in some bottle
+            regions and reports the table's depth in others, giving the policy both incomplete and
+            incorrect geometry. <b>(b)</b> Depth prediction restores a plausible surface, but can
+            introduce metrically incorrect, <i>hallucinated geometry</i> that misdirects contact or
+            motion; an ordinary point cloud conceals which surfaces were predicted. <b>(c)</b> Our
+            framework retains predicted geometry while exposing each point's measured or predicted
+            origin and regulating its influence on the policy.
+          </figcaption>
+        </figure>
+      </div>
+
+      <div class="pg-wrap">
+        <figure class="pg-pair-duo reveal">
+          <div class="pg-pair-duo__cell">
+            <div class="pg-slider"
+                 data-base="static/images/bottlelid"
+                 data-poster="static/images/bottlelid_rgb.png"
+                 data-cam="Wrist"
+                 data-label-rgb="RGB"
+                 data-label-depth="Raw depth"
+                 data-aspect="4/3"
+                 data-width="640" data-height="480"
+                 data-start="50"
+                 data-alt-rgb="Wrist-camera colour image of the bottle-lid scene: bottles on a plate with the gripper approaching a lid."
+                 data-alt-depth="Raw sensor depth for the same frame, colour-mapped: large regions of the frame carry no return at all."></div>
+            <figcaption class="pg-slider-cap">
+              <b>The colour image is unambiguous. The geometry is not.</b> A wrist camera on the
+              bimanual workspace. Drag the divider: where the colour image is perfectly readable,
+              the raw depth is fragmentary.
+            </figcaption>
+          </div>
+          <div class="pg-pair-duo__cell">
+            <div class="pg-slider"
+                 data-base="static/images/wrist2"
+                 data-poster="static/images/wrist2_rgb.png"
+                 data-cam="Wrist"
+                 data-label-rgb="RGB"
+                 data-label-depth="Raw depth"
+                 data-aspect="4/3"
+                 data-width="640" data-height="480"
+                 data-start="50"
+                 data-alt-rgb="The other wrist camera, looking into a clear bin."
+                 data-alt-depth="Raw sensor depth for that frame: coverage collapses to scattered islands."></div>
+            <figcaption class="pg-slider-cap">
+              <b>The second wrist is worse.</b> Looking into the clear bin, coverage collapses to
+              scattered islands &mdash; so a predictor working here has little measured geometry to
+              anchor on.
+            </figcaption>
+          </div>
+        </figure>
+      </div>
+
+      <div class="pg-wrap pg-narrow">
+        <h3 class="pg-h3 reveal">Additional measurements</h3>
+        <p class="pg-body-text reveal">
+          Beyond what the paper reports, we measured how often the sensor returns a surface that is
+          not there. On one standing-bottle frame, classifying the object's 28,991 pixels against a
+          fitted table plane puts <b>41%</b> of them <i>at the table behind the glass</i>, 36% in
+          front of it, 20% invalid and 3% behind; a second plane fit on the same frame gives 46%
+          and 30%. This is scene-dependent, not a property of transparent objects: over a 20-frame
+          corpus of a different scene the same measurement gives a median of <b>5%</b>. What holds
+          across all of them is that the geometry reaching the policy is confidently wrong at some
+          rate, and nothing in the depth map says which points those are.
+        </p>
+      </div>
+
+      <div class="pg-wrap">
+        <figure class="pg-figure reveal">
+          <div class="pg-figure__frame">
+            <img src="static/images/evidence_seethrough.png" width="1950" height="1260" loading="lazy" decoding="async"
+                 alt="Six panels on one standing-bottle frame: colour with the object outline, raw depth with holes in white, bottle pixels classified against the fitted table plane, the predicted depth on the same colour scale, the segmentation mask, and a scan line through the bottle showing the sensor tracking the table plane while the prediction places a surface one to two centimetres nearer.">
+          </div>
+          <figcaption class="pg-figure__cap">
+            <b>The sensor returns the table, through the bottle, at full confidence.</b> Bottle
+            pixels classified against a RANSAC table plane (&plusmn;5&nbsp;mm along each pixel's own
+            ray). The scan line &mdash; the mask row with the most such pixels &mdash; shows the
+            sensor tracking the table plane <i>inside</i> the bottle while the predictor places a
+            surface 1&ndash;2&nbsp;cm nearer: two different wrong surfaces, neither of them flagged.
+            <span class="pg-prov"><b>Supplementary, not a paper figure.</b> Measured on one frame; the five-point spread between the two plane fits is the fit, not the data.</span>
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- ============================== METHOD (04) ======================== -->
+    <section class="pg-section" id="method">
+      <div class="pg-wrap pg-narrow">
+        <div class="pg-eyebrow reveal">
+          <span class="pg-eyebrow__num">04</span>
+          <span class="pg-eyebrow__label">Method</span>
+          <span class="pg-eyebrow__rule" aria-hidden="true"></span>
+        </div>
+        <h2 class="pg-h2 reveal">Provenance is the <em>prior</em>, not the verdict.</h2>
+        <p class="pg-lead reveal">
+          Three quantities are kept apart, because they serve different purposes: provenance records
+          the <b>source</b> of a point, a learned weight regulates its <b>contribution</b>, and a
+          deployment control lets an operator <b>revise reliance</b> on predicted geometry. A
+          point's source is known from the depth pipeline; its usefulness has to be learned; and
+          that learned assessment may need revision when conditions change.
+        </p>
+      </div>
+
+      <div class="pg-wrap">
+        <figure class="pg-figure reveal">
+          <div class="pg-figure__frame">
+            <img src="static/images/paper_pipeline.png" width="2400" height="1088" loading="lazy" decoding="async"
+                 alt="The framework: sensor and predicted depth are lifted into one cloud carrying a provenance label per point; a gate learns each point's weight from demonstrations and from disagreement among independently trained policies; at deployment one policy acts with adjustable reliance. Two insets show the token-based and rendered-view adapters.">
+          </div>
+          <figcaption class="pg-figure__cap">
+            <b>Learning and controlling reliance on predicted geometry for 3D manipulation.</b>
+            <b>(a)</b> The framework preserves whether each point comes from sensor measurements or
+            depth prediction. A gate learns how strongly points should influence the policy from
+            demonstrations and agreement among independently trained policies. At deployment, a
+            single policy acts with adjustable reliance on predicted geometry. <b>(b)</b>
+            Token-based policies carry provenance with each token and control influence through
+            sampling and attention. <b>(c)</b> The rendered-view adapter preserves provenance in
+            virtual views and weights point contributions during rendering.
+            <span class="pg-prov">The ensemble spread curves in (a) are schematic.</span>
+          </figcaption>
+        </figure>
+      </div>
+
+      <div class="pg-wrap pg-narrow">
+        <h3 class="pg-h3 reveal">The interface</h3>
+        <p class="pg-body-text reveal">
+          Each lifted point carries a label <b>p<sub>i</sub></b>: 0 for retained sensor depth, 1 for
+          predicted depth &mdash; following the source actually used in the final depth map,
+          including predictions that <i>replace</i> apparently valid sensor readings. Provenance is
+          then a prior for a learnable epistemic gate, initialised as a zero correction to
+          <b>q<sub>i</sub> = 1 &minus; &alpha;p<sub>i</sub></b>, so predicted points start attenuated
+          but never excluded. Learning changes the weight <b>w<sub>i</sub></b>; it never changes the
+          factual label <b>p<sub>i</sub></b>, and it never moves a coordinate &mdash; multiplying a
+          coordinate by a weight would relocate a surface, whereas the purpose is to regulate how
+          the policy <i>uses</i> the scene it receives.
+        </p>
+        <p class="pg-body-text reveal">
+          Where the gate acts depends on how each backbone forms its representation. For a
+          point-cloud policy, provenance is appended to the point input and features are weighted
+          before pooling. For a token-based policy, provenance accompanies the scene tokens and the
+          weights regulate both sampling and attention values &mdash; sampling matters because
+          attenuating an attention value cannot recover a useful point that token selection already
+          dropped. For a rendered-view policy, an aligned provenance plane and weighted point
+          contributions act during rendering, before the view representation mixes evidence from
+          different points.
+        </p>
+
+        <h3 class="pg-h3 reveal">Why an ensemble supervises the gate</h3>
+        <p class="pg-body-text reveal">
+          Demonstrations constrain the action, not which parts of an observation should support it.
+          Several combinations of geometric cues can reproduce the same demonstrated action,
+          especially while sensor and predicted surfaces stay correlated through training, so a gate
+          trained against one policy can favour evidence that <i>that</i> policy happens to exploit.
+          We therefore train the gate against <b>K</b> independently trained policies, frozen: with
+          fixed teachers the gate can change their predictions only by changing how the observation
+          enters them, and the teachers cannot reduce disagreement by drifting toward one another.
+          The objective combines imitation, a disagreement term, and a KL regulariser that makes any
+          departure from the provenance prior costly. Agreement alone is not enough &mdash; a shared
+          prediction can be consistently wrong &mdash; which is why disagreement complements
+          imitation rather than replacing it.
+        </p>
+
+        <h3 class="pg-h3 reveal">Reliance control at deployment</h3>
+        <p class="pg-body-text reveal">
+          The learned gate is the default. For explicit operator control, a separate
+          provenance-based override replaces the learned field with
+          <b>w<sub>i</sub> = 1 &minus; &lambda;p<sub>i</sub></b>: raising &lambda; attenuates
+          predicted points while restoring sensor-derived points to unit weight. It trades the
+          gate's learned distinctions <i>within</i> each source for predictable control over the
+          source <i>as a whole</i>. Intermediate settings are the meaningful ones, because predicted
+          geometry can be both useful and misleading in the same scene &mdash; stronger suppression
+          does not imply monotonically better manipulation. Neither path requires retraining, and
+          the ensemble is needed only to supervise gate learning, never at runtime.
+        </p>
+      </div>
+    </section>
+
+    <!-- ======================== SIMULATION (05) ========================== -->
+    <section class="pg-section pg-section--tint" id="simulation">
+      <div class="pg-wrap pg-narrow">
+        <div class="pg-eyebrow reveal">
+          <span class="pg-eyebrow__num">05</span>
+          <span class="pg-eyebrow__label">Simulation</span>
+          <span class="pg-eyebrow__rule" aria-hidden="true"></span>
+        </div>
+        <h2 class="pg-h2 reveal">Prediction helps when depth is <em>missing</em> &mdash; and hurts when it is <em>misleading</em>.</h2>
+        <p class="pg-lead reveal">
+          All 50 MetaWorld tasks and all 18 RLBench tasks of the PerAct suite, across three
+          backbones. Clean simulator depth is degraded before the observation is built: elliptical
+          regions are removed to model persistent missing returns, then filled by inpainting; for
+          the misleading condition the filled values alone are displaced toward the camera,
+          producing a spurious near surface while the amount of missing depth stays fixed. RGB,
+          demonstrated actions and simulator dynamics are untouched, and the comparisons with and
+          without provenance use identical predicted geometry.
+        </p>
+      </div>
+
+      <div class="pg-wrap">
+        <figure class="pg-figure reveal">
+          <div class="pg-figure__frame">
+            <img src="static/images/paper_simulation.png" width="2400" height="986" loading="lazy" decoding="async"
+                 alt="Left: for three tasks, RGB, ground-truth depth, raw depth, predicted depth and the learned gate values. Right: success-rate bars for each observation-and-reliance variant under missing depth and under misleading completion.">
+          </div>
+          <figcaption class="pg-figure__cap">
+            <b>Simulation examples and success rates.</b> <b>(a)</b> RGB, ground-truth depth, raw
+            depth, predicted depth, and learned gate values for three tasks. <b>(b)</b> Success
+            rates under missing depth and misleading completion.
+          </figcaption>
+        </figure>
+      </div>
+
+      <div class="pg-wrap pg-narrow">
+        <p class="pg-body-text reveal">
+          Predicted depth improves success when sensor measurements are missing, but becomes
+          detrimental when inferred surfaces are misleading &mdash; a reversal showing that
+          recovering missing geometry does not by itself ensure better control. Providing provenance
+          alone yields only modest recovery, which suggests source labels need an explicit mechanism
+          for regulating reliance. Fixed-prior weighting reduces the penalty from misleading
+          completion but sacrifices performance when predictions are useful. The learned gate
+          performs better in both conditions across all three backbones, with a smaller drop between
+          them.
+          <span class="pg-prov">Consistent with preserving useful predicted geometry while reducing sensitivity to its errors &mdash; though task success alone does not establish <i>which</i> points the gate suppresses. The degradation masks approximate selected failure modes; they are not an optical sensor model.</span>
+        </p>
+      </div>
+    </section>
+
+    <!-- ============================ REAL ROBOT (06) ====================== -->
+    <section class="pg-section" id="real-robot">
+      <div class="pg-wrap pg-narrow">
+        <div class="pg-eyebrow reveal">
+          <span class="pg-eyebrow__num">06</span>
+          <span class="pg-eyebrow__label">Real robot</span>
+          <span class="pg-eyebrow__rule" aria-hidden="true"></span>
+        </div>
+        <h2 class="pg-h2 reveal">Transparent objects, real sensing, <em>20 trials a cell</em>.</h2>
+        <p class="pg-lead reveal">
+          A single-arm UR5e workspace and a bimanual pair of UR3e arms, each wrist carrying an Intel
+          RealSense D405. Depth defects here are not simulated: they arise from sensing transparent
+          and reflective objects as the camera and objects move. All models stay frozen through
+          held-out physical trials, started from matched object configurations with the method order
+          randomised.
+        </p>
+      </div>
+
+      <div class="pg-wrap">
+        <figure class="pg-figure reveal">
+          <div class="pg-figure__frame">
+            <img src="static/images/paper_realrobot.png" width="2100" height="916" loading="lazy" decoding="async"
+                 alt="Bimanual bottle loading: the left arm removes the lid while the right arm transfers bottles into a bin, with arrows showing the intended motions. Side panels show RGB, raw depth, predicted depth and the learned gate at two timestamps.">
+          </div>
+          <figcaption class="pg-figure__cap">
+            <b>Bimanual bottle loading and wrist-camera observations.</b> The left arm removes the
+            lid, and the right arm transfers the bottles into the bin; arrows indicate the intended
+            motions. Side panels show RGB, raw depth, predicted depth, and learned gates at two
+            timestamps.
+          </figcaption>
+        </figure>
+      </div>
+
+      <div class="pg-wrap pg-narrow">
+        <table class="pg-table reveal">
+          <thead>
+            <tr><th scope="col">Task</th><th scope="col">Raw</th><th scope="col">Baseline</th><th scope="col">Ours</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Transparent bottle stowing</td><td>10.0</td><td>45.0</td><td class="pg-ours">85.0</td></tr>
+            <tr><td>Grasp test-tube and pour</td><td>30.0</td><td>55.0</td><td class="pg-ours">75.0</td></tr>
+            <tr><td>Petri-dish lid removal</td><td>25.0</td><td>40.0</td><td class="pg-ours">75.0</td></tr>
+            <tr><td>Bimanual bottle loading</td><td>10.0</td><td>30.0</td><td class="pg-ours">85.0</td></tr>
+          </tbody>
+        </table>
+        <p class="pg-prov reveal" style="margin-top:.2rem">
+          Success rate (%) on tasks involving primarily transparent objects. Raw and Baseline are
+            the same policy on raw sensor depth and on predicted depth; Ours adds provenance and
+            learned gating. Matched demonstration splits, point budgets, action horizons and
+            controllers; Baseline and Ours share the same depth predictions. 20 trials per task and
+            method. Success requires completing the whole task without intervention within 60&nbsp;s
+            (single-arm) or 120&nbsp;s (bimanual).
+        </p>
+
+        <p class="pg-body-text reveal">
+          Predicted depth improves success over raw sensing on every task, consistent with
+          recovering useful geometric cues for transparent objects. Our interface improves further
+          on every task, which suggests that regulating reliance adds value beyond supplying
+          predicted geometry alone. The largest gain over the predicted-depth baseline is bimanual
+          loading, where lid removal and repeated bottle transfers must <i>all</i> succeed &mdash;
+          suggesting a benefit from managing unreliable geometry across successive actions, although
+          task-level success rates do not isolate which stage benefits most.
+        </p>
+
+        <h3 class="pg-h3 reveal">Limitations</h3>
+        <p class="pg-body-text reveal">
+          Provenance records origin rather than correctness, and independently trained policies can
+          share the same errors. Neither source labels nor ensemble agreement guarantees that a
+          surface is accurate or suitable for physical interaction. Weighting changes how geometry
+          contributes to the policy, but cannot repair incorrect surfaces or recover information
+          absent from both measurements and predictions.
+        </p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ============================== FOOTER ============================= -->
+  <footer class="pg-footer">
+    <div class="pg-wrap pg-footer__inner">
+      <span class="pg-footer__brand">Anonymous ICRA 2027 Submission.</span>
+      <span class="pg-footer__note">Code will be released upon acceptance.</span>
+      <span class="pg-footer__credit">Website template adapted from the Nerfies project page (CC-BY).</span>
+    </div>
+  </footer>
+
+  <script src="static/js/site.js"></script>
+  <script src="static/js/slider.js"></script>
+</body>
+</html>
